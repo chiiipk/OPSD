@@ -119,18 +119,164 @@ bash run_eval.sh
 > **Evaluation settings:** temperature=1.0, thinking mode enabled, max new tokens=38912, top-p=none, top-k disabled, min-p=0, presence penalty=0, num samples=12
 
 
-## Training
+## Non-Thinking Mode
+
+OPSD can also run in non-thinking setting where both the Qwen student and teacher are enabled_thinking=False during training (`--student_thinking False --teacher_thinking False`) and evaluated with non-thinking inference (`--no_thinking`), with faster evaluation time than thinking mode.
+
+Training:
+```bash
+bash scripts/run_opsd_4b_nonthink.sh
+bash scripts/run_opsd_8b_nonthink.sh
+```
+
+Evaluation:
+```bash
+cd eval
+bash run_eval_nonthink.sh
+```
+
+### Evaluation Results with Non-Thinking Mode across Models
+
+#### Qwen3-8B (`--jsd_token_clip 1e-7`)
+
+<div align="center">
+<table>
+<tr>
+<th align="center">AIME24</th>
+<th align="center">AIME25</th>
+<th align="center">HMMT25</th>
+</tr>
+<tr>
+<td>
+
+| Step | Avg@12 |
+|---|---|
+| Base | 26.4% |
+| 50 | 49.7% |
+| 75 | 45.3% |
+| 100 | 38.3% |
+
+</td>
+<td>
+
+| Step | Avg@12 |
+|---|---|
+| Base | 19.7% |
+| 50 | 35.0% |
+| 75 | 26.9% |
+| 100 | 27.5% |
+
+</td>
+<td>
+
+| Step | Avg@12 |
+|---|---|
+| Base | 10.8% |
+| 50 | 18.3% |
+| 75 | 17.5% |
+| 100 | 15.3% |
+
+</td>
+</tr>
+</table>
+</div>
+
+#### Qwen3-4B (`--jsd_token_clip 1e-6`)
+
+<div align="center">
+<table>
+<tr>
+<th align="center">AIME24</th>
+<th align="center">AIME25</th>
+<th align="center">HMMT25</th>
+</tr>
+<tr>
+<td>
+
+| Step | Avg@12 |
+|---|---|
+| Base | 23.1% |
+| 50 | 20.3% |
+| 75 | 27.5% |
+| 100 | 31.1% |
+| 150 | 32.8% |
+
+</td>
+<td>
+
+| Step | Avg@12 |
+|---|---|
+| Base | 21.4% |
+| 50 | 21.4% |
+| 75 | 20.8% |
+| 100 | 21.1% |
+| 150 | 21.9% |
+
+</td>
+<td>
+
+| Step | Avg@12 |
+|---|---|
+| Base | 10.8% |
+| 50 | 11.1% |
+| 75 | 13.1% |
+| 100 | 16.4% |
+| 150 | 14.4% |
+
+</td>
+</tr>
+</table>
+</div>
+
+#### Qwen3-1.7B (`--jsd_token_clip 1e-6`)
+
+<div align="center">
+<table>
+<tr>
+<th align="center">AIME24</th>
+<th align="center">AIME25</th>
+<th align="center">HMMT25</th>
+</tr>
+<tr>
+<td>
+
+| Step | Avg@12 |
+|---|---|
+| Base | 11.9% |
+| 50 | 15.0% |
+| 75 | 13.9% |
+| 100 | 12.5% |
+
+</td>
+<td>
+
+| Step | Avg@12 |
+|---|---|
+| Base | 9.2% |
+| 50 | 6.2% |
+| 75 | 8.3% |
+| 100 | 8.1% |
+
+</td>
+<td>
+
+| Step | Avg@12 |
+|---|---|
+| Base | 5.0% |
+| 25 | 7.2% |
+| 50 | 5.8% |
+| 75 | 5.0% |
+
+</td>
+</tr>
+</table>
+</div>
+
+> **Evaluation settings:** temperature=1.0, non-thinking mode, num samples=12.
 
 
-### OPSD
 
-See 
-
-[`scripts/run_opsd_1b.sh`](scripts/run_opsd_1b.sh).
-[`scripts/run_opsd_4b.sh`](scripts/run_opsd_4b.sh).
-[`scripts/run_opsd_8b.sh`](scripts/run_opsd_8b.sh).
-
-#### Key OPSD arguments
+## Key OPSD arguments
 
 | Argument | Default | Description |
 |---|---|---|
@@ -138,7 +284,7 @@ See
 | `--use_tinker_loss` | `False` | Use sampled-token policy-gradient objective instead of full-vocabulary JSD. More memory efficient. Currently no clipped implemented for this variant, could be unstable. |
 | `--max_completion_length` | — | Student generation length for distillation. We use 1024 in our main experiments. |
 | `--beta` | — | Interpolation weight for the JSD mixture distribution. Beta=0 means forward KL and 1 means reverse KL. |
-| `--jsd_token_clip` | 0.05 | Clip the JSD loss for each token to a maximum value. This can improve stability by preventing stylistic tokens from dominating the training signal. | 
+| `--jsd_token_clip` | 0.05 | Clip the JSD loss for each token to a maximum value. This can improve stability by preventing stylistic tokens from dominating the training signal. Note when clipping is applied, the loss can be negative due to positive KL summand being capped. | 
 | `--reason_first` | `False` | Prepend an explicit rationalization to the teacher context before distillation. |
 | `--run_config` | `None` | Custom name suffix for the output directory and WandB run. |
 

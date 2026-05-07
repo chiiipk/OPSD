@@ -142,6 +142,8 @@ class OPSDTrainer(SFTTrainer):
         jsd_token_clip: float | None = None,
         use_ema_teacher: bool = False,
         ema_decay: float = 0.999,
+        student_thinking: bool = False,
+        teacher_thinking: bool = True,
     ):
         self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
         self.model_revision = getattr(args, "student_model_revision", None)
@@ -152,7 +154,11 @@ class OPSDTrainer(SFTTrainer):
         # Custom data collator for self-distillation
         if data_collator is None:
             data_collator = SelfDistillationDataCollator(
-                tokenizer=processing_class, max_length=args.max_length, reason_first=reason_first
+                tokenizer=processing_class,
+                max_length=args.max_length,
+                reason_first=reason_first,
+                student_thinking=student_thinking,
+                teacher_thinking=teacher_thinking,
             )
 
         super().__init__(

@@ -12,10 +12,19 @@ class SelfDistillationDataCollator:
     within each batch, and track the actual (unpadded) prompt lengths for loss masking.
     """
 
-    def __init__(self, tokenizer, max_length=2048, reason_first=True):
+    def __init__(
+        self,
+        tokenizer,
+        max_length=2048,
+        reason_first=True,
+        student_thinking=False,
+        teacher_thinking=True,
+    ):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.reason_first = reason_first
+        self.student_thinking = student_thinking
+        self.teacher_thinking = teacher_thinking
 
         # Prompt for reasoning about the solution before teaching
         self.reason_first_prompt = (
@@ -60,7 +69,7 @@ class SelfDistillationDataCollator:
 
             # Apply chat template for student (matching evaluation)
             student_prompt = self.tokenizer.apply_chat_template(
-                student_messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+                student_messages, tokenize=False, add_generation_prompt=True, enable_thinking=self.student_thinking
             )
             student_prompts.append(student_prompt)
 
@@ -96,7 +105,7 @@ class SelfDistillationDataCollator:
 
                 # Apply chat template for teacher
                 teacher_prompt = self.tokenizer.apply_chat_template(
-                    teacher_messages, tokenize=False, add_generation_prompt=True, enable_thinking=True
+                    teacher_messages, tokenize=False, add_generation_prompt=True, enable_thinking=self.teacher_thinking
                 )
                 teacher_prompts.append(teacher_prompt)
 

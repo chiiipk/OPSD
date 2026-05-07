@@ -92,6 +92,20 @@ class CustomScriptArguments(ScriptArguments):
             "Typical range: 0.99–0.9999. Only used when use_ema_teacher=True."
         },
     )
+    student_thinking: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to enable Qwen3 thinking mode for the student during rollout. "
+            "Default False (matches the main OPSD setup: student rolls out without <think>)."
+        },
+    )
+    teacher_thinking: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to enable Qwen3 thinking mode for the teacher when scoring student tokens. "
+            "Default True. Set to False for the matched non-thinking ablation (both nonthink)."
+        },
+    )
 
 
 if __name__ == "__main__":
@@ -266,6 +280,8 @@ if __name__ == "__main__":
         jsd_token_clip=script_args.jsd_token_clip if script_args.jsd_token_clip > 0 else None,
         use_ema_teacher=script_args.use_ema_teacher,
         ema_decay=script_args.ema_decay,
+        student_thinking=script_args.student_thinking,
+        teacher_thinking=script_args.teacher_thinking,
     )
 
     if training_args.eval_strategy != "no":
