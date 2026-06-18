@@ -1,0 +1,126 @@
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+import argparse
+
+def compute_matrix_entropy(hidden_states):
+    """Tính Matrix Entropy thực sự (Von Neumann) cho các layers"""
+    entropies = []
+    for h in hidden_states:
+        h_matrix = h[0].float().cpu() # [seq_len, hidden_dim]
+        S = torch.linalg.svdvals(h_matrix)
+        p = (S ** 2) / (S ** 2).sum()
+        p = p[p > 1e-9]
+        entropy = - (p * torch.log(p)).sum().item()
+        entropies.append(entropy)
+    return entropies
+
+def evaluate_leakage(base_model_path, trained_model_path):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+
+    # Load Tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(base_model_path, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    # Load Base Model
+    print("\n[1] Loading Base Model...")
+    base_model = AutoModelForCausalLM.from_pretrained(
+        base_model_path, 
+        device_map="auto", 
+        torch_dtype=torch.float16,
+        trust_remote_code=True
+    )
+    base_model.eval()
+
+    # Load Trained Student Model
+    print("\n[2] Loading Trained Student Model...")
+    try:
+        trained_model = AutoModelForCausalLM.from_pretrained(
+            trained_model_path, 
+            device_map="auto", 
+            torch_dtype=torch.float16,
+            trust_remote_code=True
+        )
+        trained_model.eval()
+    except Exception as e:
+        print(f"Could not load trained model at {trained_model_path}. Error: {e}")
+        print("Please ensure the training has finished and saved the model.")
+        return
+
+    # Sample Math Problem (Student's Prompt)
+    # Trong OPSD, Student chỉ nhận được Problem.
+    prompt = "Problem: Solve the equation 3x^2 - 12 = 0.\nSolution: Let's think step by step.\n"
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+
+    # 1. Generate & Print Outputs to verify Reference Answer Leakage
+    print("\n" + "="*50)
+    print(" GENERATION TEST (CHECK FOR DATA LEAKAGE) ")
+    print("="*50)
+    
+    gen_kwargs = {
+        "max_new_tokens": 150,
+        "temperature": 0.7,
+        "do_sample": True,
+        "top_p": 0.9,
+        "pad_token_id": tokenizer.pad_token_id
+    }
+
+    # Base Model Generation
+    print("\n--- BASE MODEL OUTPUT ---")
+    with torch.no_grad():
+        base_out_ids = base_model.generate(**inputs, **gen_kwargs)
+    base_output_text = tokenizer.decode(base_out_ids[0], skip_special_tokens=True)
+    print(base_output_text)
+
+    # Trained Model Generation
+    print("\n--- TRAINED STUDENT MODEL OUTPUT ---")
+    with torch.no_grad():
+        trained_out_ids = trained_model.generate(**inputs, **gen_kwargs)
+    trained_output_text = tokenizer.decode(trained_out_ids[0], skip_special_tokens=True)
+    print(trained_output_text)
+
+    # Kiểm tra bằng mắt: Nếu Student Model in ra định dạng hoặc lời văn y hệt "Reference Answer" 
+    # của Teacher mà nó chưa từng được dạy cách giải, đó chính là Data Leakage!
+
+    # 2. Extract Hidden States and Compute Matrix Entropy
+    print("\n" + "="*50)
+    print(" CALCULATING MATRIX ENTROPY ")
+    print("="*50)
+
+    # Để so sánh công bằng, ta lấy chính chuỗi text do Trained Model sinh ra, 
+    # đẩy qua cả 2 model để xem cấu trúc ma trận của chúng khác nhau thế nào trên cùng một câu.
+    target_inputs = tokenizer(trained_output_text, return_tensors="pt").to(device)
+
+    with torch.no_grad():
+        base_outputs = base_model(**target_inputs, output_hidden_states=True)
+        trained_outputs = trained_model(**target_inputs, output_hidden_states=True)
+
+    base_entropies = compute_matrix_entropy(base_outputs.hidden_states)
+    trained_entropies = compute_matrix_entropy(trained_outputs.hidden_states)
+
+    # Vẽ biểu đồ
+    plt.figure(figsize=(10, 6))
+    plt.plot(base_entropies, label="Base Model (Chưa train)", marker='o', color='blue')
+    plt.plot(trained_entropies, label="Student Model (Bị Leakage)", marker='x', color='red')
+    plt.title("Matrix Entropy (Von Neumann) so sánh giữa Base và Trained Model")
+    plt.xlabel("Layer Depth")
+    plt.ylabel("Matrix Entropy")
+    plt.legend()
+    plt.grid(True)
+    
+    save_path = "kaggle_entropy_comparison.png"
+    plt.savefig(save_path)
+    print(f"\nĐã lưu biểu đồ so sánh Entropy tại: {save_path}")
+    print("Hãy kiểm tra xem đường màu đỏ (Student) có bị sụt giảm Matrix Entropy do Leakage không nhé!")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--base_model", type=str, default="Qwen/Qwen2.5-0.5B", help="Path or HF ID of base model")
+    parser.add_argument("--trained_model", type=str, default="./opsd_output", help="Path to trained student model")
+    args = parser.parse_args()
+    
+    evaluate_leakage(args.base_model, args.trained_model)
