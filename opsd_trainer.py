@@ -639,6 +639,7 @@ class OPSDTrainer(SFTTrainer):
         outputs_student = model(
             input_ids=inputs["student_input_ids"],
             attention_mask=inputs["student_attention_mask"],
+            output_hidden_states=True,
         )
 
         # Extract only what we need and convert to log-probs immediately
@@ -665,6 +666,7 @@ class OPSDTrainer(SFTTrainer):
 
             minimal_output = MinimalOutput()
 
+        student_hidden_states = outputs_student.hidden_states if hasattr(outputs_student, "hidden_states") else None
         del outputs_student
         empty_cache()
 
@@ -684,6 +686,7 @@ class OPSDTrainer(SFTTrainer):
             outputs_teacher = model(
                 input_ids=inputs["teacher_input_ids"],
                 attention_mask=inputs["teacher_attention_mask"],
+                output_hidden_states=True,
             )
 
             teacher_logits = outputs_teacher.logits[:, teacher_prompt_len - 1 : -1, :]
@@ -698,6 +701,7 @@ class OPSDTrainer(SFTTrainer):
                 teacher_logits_for_loss = teacher_logits
                 del teacher_logits
 
+            teacher_hidden_states = outputs_teacher.hidden_states if hasattr(outputs_teacher, "hidden_states") else None
             del outputs_teacher
             empty_cache()
 
@@ -732,17 +736,32 @@ class OPSDTrainer(SFTTrainer):
                 student_log_probs_sampled_masked,
             )
         else:
-            # Temperature is applied inside generalized_jsd_loss
-            loss = self.generalized_jsd_loss(
-                student_logits=student_logits_for_loss,
-                teacher_logits=teacher_logits_for_loss,
-                labels=shifted_labels,
-                beta=self.beta,
-                temperature=self.temperature,  # Let the function handle temperature
-                top_k=self.top_k_loss,
-                token_clip=self.jsd_token_clip,
-            )
+            # Custom Mid-Layer Alignment & Nuclear Norm Loss
+            mid_layer_loss = 0.0
+            nuclear_norm_loss = 0.0
+            alpha = 0.01
+            
+            if student_hidden_states is not None and teacher_hidden_states is not None:
+                # Align mid layers (e.g., layers 10 to 18)
+                align_layers = range(10, min(19, len(student_hidden_states)))
+                for layer_idx in align_layers:
+                    sh = student_hidden_states[layer_idx]
+                    th = teacher_hidden_states[layer_idx]
+                    min_seq_len = min(sh.shape[1], th.shape[1])
+                    mid_layer_loss += F.mse_loss(sh[:, :min_seq_len, :], th[:, :min_seq_len, :].detach())
+                
+                # Nuclear Norm on final layer of student to prevent representation collapse
+                final_h = student_hidden_states[-1]
+                svdvals = torch.linalg.svdvals(final_h.float())
+                nuclear_norm = svdvals.sum()
+                # Normalize nuclear norm by batch*seq_len to keep loss scale stable
+                nuclear_norm_loss = -alpha * (nuclear_norm / (final_h.shape[0] * final_h.shape[1]))
+                
+            loss = mid_layer_loss + nuclear_norm_loss
+            
             del student_logits_for_loss, teacher_logits_for_loss
+            if student_hidden_states is not None:
+                del student_hidden_states, teacher_hidden_states
 
         empty_cache()
 
