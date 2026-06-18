@@ -740,8 +740,8 @@ class OPSDTrainer(SFTTrainer):
             # CẤU HÌNH TRỌNG SỐ CHO CÁC HÀM LOSS (TÙY CHỈNH TẠI ĐÂY)
             # =====================================================================
             WEIGHT_JSD          = 1.0  # Loss gốc: Ép student sinh ra token đúng định dạng
-            WEIGHT_MID_LAYER    = 0.5  # Loss Cosine: Ép student bắt chước tư duy ở lớp giữa (Layer 10-18)
-            WEIGHT_NUCLEAR_NORM = 0.5  # Loss MSE SVD: Ép độ đa dạng ở lớp cuối của student = teacher
+            WEIGHT_MID_LAYER    = 1.0  # Loss Cosine: Ép student bắt chước tư duy ở lớp giữa (Layer 10-18)
+            WEIGHT_NUCLEAR_NORM = 1.0  # Loss MSE SVD: Ép độ đa dạng ở lớp cuối của student = teacher
             # =====================================================================
             
             mid_layer_loss = 0.0
@@ -757,18 +757,23 @@ class OPSDTrainer(SFTTrainer):
                     cos_sim = F.cosine_similarity(sh[:, :min_seq_len, :], th[:, :min_seq_len, :].detach(), dim=-1)
                     mid_layer_loss += (1.0 - cos_sim).mean()
                 
-                # Match Nuclear Norm of Student with Teacher
-                final_h_s = student_hidden_states[-1]
-                final_h_t = teacher_hidden_states[-1]
+                # Match Nuclear Norm of Student with Teacher cho 4 layer cuối (Layer 21 đến 24)
+                num_final_layers = 3
+                nuclear_norm_loss = 0.0
                 
-                svdvals_s = torch.linalg.svdvals(final_h_s.float())
-                svdvals_t = torch.linalg.svdvals(final_h_t.float()).detach()
-                
-                norm_s = svdvals_s.sum() / (final_h_s.shape[0] * final_h_s.shape[1])
-                norm_t = svdvals_t.sum() / (final_h_t.shape[0] * final_h_t.shape[1])
-                
-                # Dùng MSE để ép Norm của Student bám sát Norm của Teacher (tránh tăng quá đà)
-                nuclear_norm_loss = F.mse_loss(norm_s, norm_t)
+                for i in range(1, num_final_layers + 1):
+                    final_h_s = student_hidden_states[-i]
+                    final_h_t = teacher_hidden_states[-i]
+                    
+                    svdvals_s = torch.linalg.svdvals(final_h_s.float())
+                    svdvals_t = torch.linalg.svdvals(final_h_t.float()).detach()
+                    
+                    norm_s = svdvals_s.sum() / (final_h_s.shape[0] * final_h_s.shape[1])
+                    norm_t = svdvals_t.sum() / (final_h_t.shape[0] * final_h_t.shape[1])
+                    
+                    nuclear_norm_loss += F.mse_loss(norm_s, norm_t)
+                    
+                nuclear_norm_loss = nuclear_norm_loss / num_final_layers
                 
             # Phục hồi JSD Loss (để mô hình biết cách nói chuyện/làm toán)
             jsd_loss = self.generalized_jsd_loss(
@@ -783,6 +788,16 @@ class OPSDTrainer(SFTTrainer):
             
             # Kết hợp các Loss theo trọng số đã cấu hình
             loss = (WEIGHT_JSD * jsd_loss) + (WEIGHT_MID_LAYER * mid_layer_loss) + (WEIGHT_NUCLEAR_NORM * nuclear_norm_loss)
+            
+            # Ghi log riêng biệt từng thành phần Loss
+            if self.model.training:
+                self._metrics["train"]["jsd_loss"].append(float(jsd_loss.detach()))
+                
+                mid_val = float(mid_layer_loss.detach()) if isinstance(mid_layer_loss, torch.Tensor) else float(mid_layer_loss)
+                self._metrics["train"]["mid_layer_loss"].append(mid_val)
+                
+                nuc_val = float(nuclear_norm_loss.detach()) if isinstance(nuclear_norm_loss, torch.Tensor) else float(nuclear_norm_loss)
+                self._metrics["train"]["nuclear_norm_loss"].append(nuc_val)
             
             del student_logits_for_loss, teacher_logits_for_loss
             if student_hidden_states is not None:
