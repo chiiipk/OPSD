@@ -748,7 +748,8 @@ class OPSDTrainer(SFTTrainer):
                     sh = student_hidden_states[layer_idx]
                     th = teacher_hidden_states[layer_idx]
                     min_seq_len = min(sh.shape[1], th.shape[1])
-                    mid_layer_loss += F.mse_loss(sh[:, :min_seq_len, :], th[:, :min_seq_len, :].detach())
+                    cos_sim = F.cosine_similarity(sh[:, :min_seq_len, :], th[:, :min_seq_len, :].detach(), dim=-1)
+                    mid_layer_loss += (1.0 - cos_sim).mean()
                 
                 # Nuclear Norm on final layer of student to prevent representation collapse
                 final_h = student_hidden_states[-1]
