@@ -739,9 +739,9 @@ class OPSDTrainer(SFTTrainer):
             # =====================================================================
             # CẤU HÌNH TRỌNG SỐ CHO CÁC HÀM LOSS (TÙY CHỈNH TẠI ĐÂY)
             # =====================================================================
-            WEIGHT_JSD          = 0.5  # Loss gốc: Ép student sinh ra token đúng định dạng
+            WEIGHT_JSD          = 1.0  # Loss gốc: Ép student sinh ra token đúng định dạng
             WEIGHT_MID_LAYER    = 1.0  # Loss Cosine: Ép student bắt chước tư duy ở lớp giữa (Layer 10-18)
-            WEIGHT_NUCLEAR_NORM = 0.5  # Loss MSE SVD: Ép độ đa dạng ở lớp cuối của student = teacher
+            WEIGHT_NUCLEAR_NORM = 1.0  # Loss MSE SVD: Ép độ đa dạng ở lớp cuối của student = teacher
             # =====================================================================
             
             mid_layer_loss = 0.0
@@ -761,15 +761,28 @@ class OPSDTrainer(SFTTrainer):
                 num_final_layers = 10
                 nuclear_norm_loss = 0.0
                 
+                # Lấy chiều dài phần Prompt
+                student_prompt_len = inputs["student_prompt_length"]
+                teacher_prompt_len = inputs["teacher_prompt_length"]
+                
                 for i in range(1, num_final_layers + 1):
-                    final_h_s = student_hidden_states[-i]
-                    final_h_t = teacher_hidden_states[-i]
+                    # Chỉ lấy phần Hidden States của CÂU TRẢ LỜI (bỏ qua Prompt)
+                    s_gen = student_hidden_states[-i][:, student_prompt_len:, :]
+                    t_gen = teacher_hidden_states[-i][:, teacher_prompt_len:, :]
                     
-                    svdvals_s = torch.linalg.svdvals(final_h_s.float())
-                    svdvals_t = torch.linalg.svdvals(final_h_t.float()).detach()
+                    min_gen_len = min(s_gen.shape[1], t_gen.shape[1])
+                    if min_gen_len == 0:
+                        continue
+                        
+                    # Cắt bằng nhau để SVD công bằng
+                    s_gen = s_gen[:, :min_gen_len, :]
+                    t_gen = t_gen[:, :min_gen_len, :]
                     
-                    norm_s = svdvals_s.sum() / (final_h_s.shape[0] * final_h_s.shape[1])
-                    norm_t = svdvals_t.sum() / (final_h_t.shape[0] * final_h_t.shape[1])
+                    svdvals_s = torch.linalg.svdvals(s_gen.float())
+                    svdvals_t = torch.linalg.svdvals(t_gen.float()).detach()
+                    
+                    norm_s = svdvals_s.sum() / (s_gen.shape[0] * s_gen.shape[1])
+                    norm_t = svdvals_t.sum() / (t_gen.shape[0] * t_gen.shape[1])
                     
                     # Dùng Relative MSE để scale của Loss tự động giảm về dải (0 -> 1), ngang với các Loss khác
                     nuclear_norm_loss += F.mse_loss(norm_s, norm_t) / (norm_t ** 2 + 1e-8)
