@@ -748,7 +748,20 @@ class OPSDTrainer(SFTTrainer):
             nuclear_norm_loss = 0.0
             
             if student_hidden_states is not None and teacher_hidden_states is not None:
-                # Align mid layers (e.g., layers 10 to 18)
+                # 1. Chạy thêm 1 Forward Pass của Base Model (tắt LoRA) để lấy "Chuẩn Vàng" Entropy
+                unwrapped_model = self.accelerator.unwrap_model(model)
+                base_hidden_states = None
+                if hasattr(unwrapped_model, "disable_adapter"):
+                    with unwrapped_model.disable_adapter(), torch.no_grad():
+                        base_outputs = model(
+                            input_ids=inputs["student_input_ids"],
+                            attention_mask=inputs["student_attention_mask"],
+                            output_hidden_states=True,
+                            return_dict=True,
+                        )
+                        base_hidden_states = base_outputs.hidden_states
+
+                # Align mid layers (e.g., layers 10 to 18) với Teacher
                 align_layers = range(10, min(19, len(student_hidden_states)))
                 for layer_idx in align_layers:
                     sh = student_hidden_states[layer_idx]
@@ -757,35 +770,34 @@ class OPSDTrainer(SFTTrainer):
                     cos_sim = F.cosine_similarity(sh[:, :min_seq_len, :], th[:, :min_seq_len, :].detach(), dim=-1)
                     mid_layer_loss += (1.0 - cos_sim).mean()
                 
-                # Match Nuclear Norm of Student with Teacher cho 4 layer cuối (Layer 21 đến 24)
+                # Match Nuclear Norm of Student with Base Model cho các layer cuối
                 num_final_layers = 10
                 nuclear_norm_loss = 0.0
                 
                 # Lấy chiều dài phần Prompt
                 student_prompt_len = inputs["student_prompt_length"]
-                teacher_prompt_len = inputs["teacher_prompt_length"]
                 
+                # Ưu tiên lấy Base Model (độc lập), nếu không có thì fallback về Teacher
+                target_hidden_states = base_hidden_states if base_hidden_states is not None else teacher_hidden_states
+
                 for i in range(1, num_final_layers + 1):
-                    # Chỉ lấy phần Hidden States của CÂU TRẢ LỜI (bỏ qua Prompt)
+                    # Chỉ lấy phần CÂU TRẢ LỜI (bỏ Prompt) của Student và Target (Base Model)
+                    # Vì Base Model chạy trên đúng input của Student, sequence length khớp nhau 100%
                     s_gen = student_hidden_states[-i][:, student_prompt_len:, :]
-                    t_gen = teacher_hidden_states[-i][:, teacher_prompt_len:, :]
+                    b_gen = target_hidden_states[-i][:, student_prompt_len:, :]
                     
-                    min_gen_len = min(s_gen.shape[1], t_gen.shape[1])
-                    if min_gen_len == 0:
+                    if s_gen.shape[1] == 0:
                         continue
                         
-                    # Cắt bằng nhau để SVD công bằng
-                    s_gen = s_gen[:, :min_gen_len, :]
-                    t_gen = t_gen[:, :min_gen_len, :]
-                    
                     svdvals_s = torch.linalg.svdvals(s_gen.float())
-                    svdvals_t = torch.linalg.svdvals(t_gen.float()).detach()
+                    svdvals_b = torch.linalg.svdvals(b_gen.float()).detach()
                     
+                    # Tính Nuclear Norm (Tổng các Singular Values)
                     norm_s = svdvals_s.sum() / (s_gen.shape[0] * s_gen.shape[1])
-                    norm_t = svdvals_t.sum() / (t_gen.shape[0] * t_gen.shape[1])
+                    norm_b = svdvals_b.sum() / (b_gen.shape[0] * b_gen.shape[1])
                     
-                    # Dùng Relative MSE để scale của Loss tự động giảm về dải (0 -> 1), ngang với các Loss khác
-                    nuclear_norm_loss += F.mse_loss(norm_s, norm_t) / (norm_t ** 2 + 1e-8)
+                    # Khớp Student với Base Model để chống sụp đổ
+                    nuclear_norm_loss += F.mse_loss(norm_s, norm_b) / (norm_b ** 2 + 1e-8)
                     
                 nuclear_norm_loss = nuclear_norm_loss / num_final_layers
                 
