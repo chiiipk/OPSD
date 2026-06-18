@@ -758,7 +758,7 @@ class OPSDTrainer(SFTTrainer):
                     mid_layer_loss += (1.0 - cos_sim).mean()
                 
                 # Match Nuclear Norm of Student with Teacher cho 4 layer cuối (Layer 21 đến 24)
-                num_final_layers = 3
+                num_final_layers = 10
                 nuclear_norm_loss = 0.0
                 
                 for i in range(1, num_final_layers + 1):
@@ -771,7 +771,8 @@ class OPSDTrainer(SFTTrainer):
                     norm_s = svdvals_s.sum() / (final_h_s.shape[0] * final_h_s.shape[1])
                     norm_t = svdvals_t.sum() / (final_h_t.shape[0] * final_h_t.shape[1])
                     
-                    nuclear_norm_loss += F.mse_loss(norm_s, norm_t)
+                    # Dùng Relative MSE để scale của Loss tự động giảm về dải (0 -> 1), ngang với các Loss khác
+                    nuclear_norm_loss += F.mse_loss(norm_s, norm_t) / (norm_t ** 2 + 1e-8)
                     
                 nuclear_norm_loss = nuclear_norm_loss / num_final_layers
                 
