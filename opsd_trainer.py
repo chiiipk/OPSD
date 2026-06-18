@@ -736,10 +736,16 @@ class OPSDTrainer(SFTTrainer):
                 student_log_probs_sampled_masked,
             )
         else:
-            # Custom Mid-Layer Alignment & Nuclear Norm Loss
+            # =====================================================================
+            # CẤU HÌNH TRỌNG SỐ CHO CÁC HÀM LOSS (TÙY CHỈNH TẠI ĐÂY)
+            # =====================================================================
+            WEIGHT_JSD          = 1.0  # Loss gốc: Ép student sinh ra token đúng định dạng
+            WEIGHT_MID_LAYER    = 0.5  # Loss Cosine: Ép student bắt chước tư duy ở lớp giữa (Layer 10-18)
+            WEIGHT_NUCLEAR_NORM = 0.5  # Loss MSE SVD: Ép độ đa dạng ở lớp cuối của student = teacher
+            # =====================================================================
+            
             mid_layer_loss = 0.0
             nuclear_norm_loss = 0.0
-            alpha = 0.01
             
             if student_hidden_states is not None and teacher_hidden_states is not None:
                 # Align mid layers (e.g., layers 10 to 18)
@@ -751,14 +757,32 @@ class OPSDTrainer(SFTTrainer):
                     cos_sim = F.cosine_similarity(sh[:, :min_seq_len, :], th[:, :min_seq_len, :].detach(), dim=-1)
                     mid_layer_loss += (1.0 - cos_sim).mean()
                 
-                # Nuclear Norm on final layer of student to prevent representation collapse
-                final_h = student_hidden_states[-1]
-                svdvals = torch.linalg.svdvals(final_h.float())
-                nuclear_norm = svdvals.sum()
-                # Normalize nuclear norm by batch*seq_len to keep loss scale stable
-                nuclear_norm_loss = -alpha * (nuclear_norm / (final_h.shape[0] * final_h.shape[1]))
+                # Match Nuclear Norm of Student with Teacher
+                final_h_s = student_hidden_states[-1]
+                final_h_t = teacher_hidden_states[-1]
                 
-            loss = mid_layer_loss + nuclear_norm_loss
+                svdvals_s = torch.linalg.svdvals(final_h_s.float())
+                svdvals_t = torch.linalg.svdvals(final_h_t.float()).detach()
+                
+                norm_s = svdvals_s.sum() / (final_h_s.shape[0] * final_h_s.shape[1])
+                norm_t = svdvals_t.sum() / (final_h_t.shape[0] * final_h_t.shape[1])
+                
+                # Dùng MSE để ép Norm của Student bám sát Norm của Teacher (tránh tăng quá đà)
+                nuclear_norm_loss = F.mse_loss(norm_s, norm_t)
+                
+            # Phục hồi JSD Loss (để mô hình biết cách nói chuyện/làm toán)
+            jsd_loss = self.generalized_jsd_loss(
+                student_logits=student_logits_for_loss,
+                teacher_logits=teacher_logits_for_loss,
+                labels=shifted_labels,
+                beta=self.beta,
+                temperature=self.temperature,
+                top_k=self.top_k_loss,
+                token_clip=self.jsd_token_clip,
+            )
+            
+            # Kết hợp các Loss theo trọng số đã cấu hình
+            loss = (WEIGHT_JSD * jsd_loss) + (WEIGHT_MID_LAYER * mid_layer_loss) + (WEIGHT_NUCLEAR_NORM * nuclear_norm_loss)
             
             del student_logits_for_loss, teacher_logits_for_loss
             if student_hidden_states is not None:
