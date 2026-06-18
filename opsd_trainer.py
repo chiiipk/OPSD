@@ -739,9 +739,9 @@ class OPSDTrainer(SFTTrainer):
             # =====================================================================
             # CẤU HÌNH TRỌNG SỐ CHO CÁC HÀM LOSS (TÙY CHỈNH TẠI ĐÂY)
             # =====================================================================
-            WEIGHT_JSD          = 1.0  # Loss gốc: Ép student sinh ra token đúng định dạng
+            WEIGHT_JSD          = 0  # Loss gốc: Ép student sinh ra token đúng định dạng
             WEIGHT_MID_LAYER    = 1.0  # Loss Cosine: Ép student bắt chước tư duy ở lớp giữa (Layer 10-18)
-            WEIGHT_NUCLEAR_NORM = 1.0  # Loss MSE SVD: Ép độ đa dạng ở lớp cuối của student = teacher
+            WEIGHT_NUCLEAR_NORM = 0  # Loss MSE SVD: Ép độ đa dạng ở lớp cuối của student = teacher
             # =====================================================================
             
             mid_layer_loss = 0.0
